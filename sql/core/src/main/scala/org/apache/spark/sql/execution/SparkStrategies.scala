@@ -70,7 +70,12 @@ abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
         case Limit(IntegerLiteral(limit), Project(projectList, Sort(order, true, child))) =>
           TakeOrderedAndProjectExec(limit, order, projectList, planLater(child)) :: Nil
         case Limit(IntegerLiteral(limit), child) =>
-          CollectLimitExec(limit, planLater(child)) :: Nil
+          // With whole stage codegen, Spark releases resources only when all the output data of the
+          // query plan are consumed. It's possible that `CollectLimitExec` only consumes a little
+          // data from child plan and finishes the query without releasing resources. Here we wrap
+          // the child plan with `LocalLimitExec`, to stop the processing of whole stage codegen and
+          // trigger the resource releasing work, after we consume `limit` rows.
+          CollectLimitExec(limit, LocalLimitExec(limit, planLater(child))) :: Nil
         case other => planLater(other) :: Nil
       }
       case Limit(IntegerLiteral(limit), Sort(order, true, child)) =>
@@ -335,6 +340,9 @@ abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
       case Deduplicate(keys, child) if child.isStreaming =>
         StreamingDeduplicateExec(keys, planLater(child)) :: Nil
 
+      case DeduplicateWithoutShuffle(keys, child) if child.isStreaming =>
+        StreamingDeduplicateWithoutShuffleExec(keys, planLater(child)) :: Nil
+
       case _ => Nil
     }
   }
@@ -367,9 +375,9 @@ abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
 
         val (functionsWithDistinct, functionsWithoutDistinct) =
           aggregateExpressions.partition(_.isDistinct)
-        if (functionsWithDistinct.map(_.aggregateFunction.children.toSet).distinct.length > 1) {
+        if (functionsWithDistinct.map(_.aggregateFunction.children).distinct.length > 1) {
           // This is a sanity check. We should not reach here when we have multiple distinct
-          // column sets. Our `RewriteDistinctAggregates` should take care this case.
+          // column sets. Our MultipleDistinctRewriter should take care this case.
           sys.error("You hit a query analyzer bug. Please report your query to " +
               "Spark user mailing list.")
         }
@@ -441,6 +449,23 @@ abstract class SparkStrategies extends QueryPlanner[SparkPlan] {
           func, keyDeser, valueDeser, groupAttr, dataAttr, outputAttr, None, stateEnc, outputMode,
           timeout, batchTimestampMs = None, eventTimeWatermark = None, planLater(child))
         execPlan :: Nil
+
+      case FlatMapGroupsWithStateWithoutShuffle(
+        func, keyDeser, valueDeser, groupAttr, dataAttr, outputAttr, stateEnc, outputMode, _,
+        timeout, child) =>
+          val execPlan = FlatMapGroupsWithStateWithoutShuffleExec(
+            func, keyDeser, valueDeser, groupAttr, dataAttr, outputAttr, None, stateEnc, outputMode,
+            timeout, batchTimestampMs = None, eventTimeWatermark = None, planLater(child))
+        execPlan :: Nil
+
+      case FlatMapGroupsWithStateWithoutShuffleSort(
+        func, keyDeser, valueDeser, groupAttr, dataAttr, outputAttr, stateEnc, outputMode, _,
+        timeout, child) =>
+          val execPlan = FlatMapGroupsWithStateWithoutShuffleSortExec(
+            func, keyDeser, valueDeser, groupAttr, dataAttr, outputAttr, None, stateEnc, outputMode,
+            timeout, batchTimestampMs = None, eventTimeWatermark = None, planLater(child))
+        execPlan :: Nil
+
       case _ =>
         Nil
     }
