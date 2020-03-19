@@ -364,13 +364,13 @@ case object EventTimeTimeout extends GroupStateTimeout
 /** Factory for constructing new `MapGroupsWithState` nodes. */
 object FlatMapGroupsWithState {
   def apply[K: Encoder, V: Encoder, S: Encoder, U: Encoder](
-      func: (Any, Iterator[Any], LogicalGroupState[Any]) => Iterator[Any],
-      groupingAttributes: Seq[Attribute],
-      dataAttributes: Seq[Attribute],
-      outputMode: OutputMode,
-      isMapGroupsWithState: Boolean,
-      timeout: GroupStateTimeout,
-      child: LogicalPlan): LogicalPlan = {
+    func: (Any, Iterator[Any], LogicalGroupState[Any]) => Iterator[Any],
+    groupingAttributes: Seq[Attribute],
+    dataAttributes: Seq[Attribute],
+    outputMode: OutputMode,
+    isMapGroupsWithState: Boolean,
+    timeout: GroupStateTimeout,
+    child: LogicalPlan): LogicalPlan = {
     val encoder = encoderFor[S]
 
     val mapped = new FlatMapGroupsWithState(
@@ -407,22 +407,150 @@ object FlatMapGroupsWithState {
  * @param timeout used to timeout groups that have not received data in a while
  */
 case class FlatMapGroupsWithState(
-    func: (Any, Iterator[Any], LogicalGroupState[Any]) => Iterator[Any],
-    keyDeserializer: Expression,
-    valueDeserializer: Expression,
-    groupingAttributes: Seq[Attribute],
-    dataAttributes: Seq[Attribute],
-    outputObjAttr: Attribute,
-    stateEncoder: ExpressionEncoder[Any],
-    outputMode: OutputMode,
-    isMapGroupsWithState: Boolean = false,
-    timeout: GroupStateTimeout,
-    child: LogicalPlan) extends UnaryNode with ObjectProducer {
+  func: (Any, Iterator[Any], LogicalGroupState[Any]) => Iterator[Any],
+  keyDeserializer: Expression,
+  valueDeserializer: Expression,
+  groupingAttributes: Seq[Attribute],
+  dataAttributes: Seq[Attribute],
+  outputObjAttr: Attribute,
+  stateEncoder: ExpressionEncoder[Any],
+  outputMode: OutputMode,
+  isMapGroupsWithState: Boolean = false,
+  timeout: GroupStateTimeout,
+  child: LogicalPlan) extends UnaryNode with ObjectProducer {
 
   if (isMapGroupsWithState) {
     assert(outputMode == OutputMode.Update)
   }
 }
+
+
+/** Factory for constructing new `MapGroupsWithState` nodes. */
+object FlatMapGroupsWithStateWithoutShuffle {
+  def apply[K: Encoder, V: Encoder, S: Encoder, U: Encoder](
+    func: (Any, Iterator[Any], LogicalGroupState[Any]) => Iterator[Any],
+    groupingAttributes: Seq[Attribute],
+    dataAttributes: Seq[Attribute],
+    outputMode: OutputMode,
+    isMapGroupsWithState: Boolean,
+    timeout: GroupStateTimeout,
+    child: LogicalPlan): LogicalPlan = {
+    val encoder = encoderFor[S]
+
+    val mapped = new FlatMapGroupsWithStateWithoutShuffle(
+      func,
+      UnresolvedDeserializer(encoderFor[K].deserializer, groupingAttributes),
+      UnresolvedDeserializer(encoderFor[V].deserializer, dataAttributes),
+      groupingAttributes,
+      dataAttributes,
+      CatalystSerde.generateObjAttr[U],
+      encoder.asInstanceOf[ExpressionEncoder[Any]],
+      outputMode,
+      isMapGroupsWithState,
+      timeout,
+      child)
+    CatalystSerde.serialize[U](mapped)
+  }
+}
+
+/**
+ * Applies func to each unique group in `child`, based on the evaluation of `groupingAttributes`,
+ * while using state data.
+ * Func is invoked with an object representation of the grouping key an iterator containing the
+ * object representation of all the rows with that key.
+ *
+ * @param func function called on each group
+ * @param keyDeserializer used to extract the key object for each group.
+ * @param valueDeserializer used to extract the items in the iterator from an input row.
+ * @param groupingAttributes used to group the data
+ * @param dataAttributes used to read the data
+ * @param outputObjAttr used to define the output object
+ * @param stateEncoder used to serialize/deserialize state before calling `func`
+ * @param outputMode the output mode of `func`
+ * @param isMapGroupsWithState whether it is created by the `mapGroupsWithState` method
+ * @param timeout used to timeout groups that have not received data in a while
+*/
+case class FlatMapGroupsWithStateWithoutShuffle(
+  func: (Any, Iterator[Any], LogicalGroupState[Any]) => Iterator[Any],
+  keyDeserializer: Expression,
+  valueDeserializer: Expression,
+  groupingAttributes: Seq[Attribute],
+  dataAttributes: Seq[Attribute],
+  outputObjAttr: Attribute,
+  stateEncoder: ExpressionEncoder[Any],
+  outputMode: OutputMode,
+  isMapGroupsWithState: Boolean = false,
+  timeout: GroupStateTimeout,
+  child: LogicalPlan) extends UnaryNode with ObjectProducer {
+
+  if (isMapGroupsWithState) {
+    assert(outputMode == OutputMode.Update)
+  }
+}
+
+/** Factory for constructing new `MapGroupsWithState` nodes. */
+object FlatMapGroupsWithStateWithoutShuffleSort {
+  def apply[K: Encoder, V: Encoder, S: Encoder, U: Encoder](
+    func: (Any, Iterator[Any], LogicalGroupState[Any]) => Iterator[Any],
+    groupingAttributes: Seq[Attribute],
+    dataAttributes: Seq[Attribute],
+    outputMode: OutputMode,
+    isMapGroupsWithState: Boolean,
+    timeout: GroupStateTimeout,
+    child: LogicalPlan): LogicalPlan = {
+    val encoder = encoderFor[S]
+
+    val mapped = new FlatMapGroupsWithStateWithoutShuffleSort(
+      func,
+      UnresolvedDeserializer(encoderFor[K].deserializer, groupingAttributes),
+      UnresolvedDeserializer(encoderFor[V].deserializer, dataAttributes),
+      groupingAttributes,
+      dataAttributes,
+      CatalystSerde.generateObjAttr[U],
+      encoder.asInstanceOf[ExpressionEncoder[Any]],
+      outputMode,
+      isMapGroupsWithState,
+      timeout,
+      child)
+    CatalystSerde.serialize[U](mapped)
+  }
+}
+
+/**
+ * Applies func to each unique group in `child`, based on the evaluation of `groupingAttributes`,
+ * while using state data.
+ * Func is invoked with an object representation of the grouping key an iterator containing the
+ * object representation of all the rows with that key.
+ *
+ * @param func function called on each group
+ * @param keyDeserializer used to extract the key object for each group.
+ * @param valueDeserializer used to extract the items in the iterator from an input row.
+ * @param groupingAttributes used to group the data
+ * @param dataAttributes used to read the data
+ * @param outputObjAttr used to define the output object
+ * @param stateEncoder used to serialize/deserialize state before calling `func`
+ * @param outputMode the output mode of `func`
+ * @param isMapGroupsWithState whether it is created by the `mapGroupsWithState` method
+ * @param timeout used to timeout groups that have not received data in a while
+*/
+case class FlatMapGroupsWithStateWithoutShuffleSort(
+  func: (Any, Iterator[Any], LogicalGroupState[Any]) => Iterator[Any],
+  keyDeserializer: Expression,
+  valueDeserializer: Expression,
+  groupingAttributes: Seq[Attribute],
+  dataAttributes: Seq[Attribute],
+  outputObjAttr: Attribute,
+  stateEncoder: ExpressionEncoder[Any],
+  outputMode: OutputMode,
+  isMapGroupsWithState: Boolean = false,
+  timeout: GroupStateTimeout,
+  child: LogicalPlan) extends UnaryNode with ObjectProducer {
+
+  if (isMapGroupsWithState) {
+    assert(outputMode == OutputMode.Update)
+  }
+}
+
 
 /** Factory for constructing new `FlatMapGroupsInR` nodes. */
 object FlatMapGroupsInR {

@@ -121,7 +121,26 @@ class IncrementalExecution(
           Some(nextStatefulOperationStateInfo),
           Some(offsetSeqMetadata.batchWatermarkMs))
 
+      case StreamingDeduplicateWithoutShuffleExec(keys, child, None, None) =>
+        StreamingDeduplicateWithoutShuffleExec(
+          keys,
+          child,
+          Some(nextStatefulOperationStateInfo),
+          Some(offsetSeqMetadata.batchWatermarkMs))
+
       case m: FlatMapGroupsWithStateExec =>
+        m.copy(
+          stateInfo = Some(nextStatefulOperationStateInfo),
+          batchTimestampMs = Some(offsetSeqMetadata.batchTimestampMs),
+          eventTimeWatermark = Some(offsetSeqMetadata.batchWatermarkMs))
+
+      case m: FlatMapGroupsWithStateWithoutShuffleExec =>
+        m.copy(
+          stateInfo = Some(nextStatefulOperationStateInfo),
+          batchTimestampMs = Some(offsetSeqMetadata.batchTimestampMs),
+          eventTimeWatermark = Some(offsetSeqMetadata.batchWatermarkMs))
+
+      case m: FlatMapGroupsWithStateWithoutShuffleSortExec =>
         m.copy(
           stateInfo = Some(nextStatefulOperationStateInfo),
           batchTimestampMs = Some(offsetSeqMetadata.batchTimestampMs),

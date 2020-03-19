@@ -456,7 +456,78 @@ case class StreamingDeduplicateExec(
   override def outputPartitioning: Partitioning = child.outputPartitioning
 }
 
+/** Physical operator for executing streaming Deduplicate. */
+case class StreamingDeduplicateWithoutShuffleExec(
+                                     keyExpressions: Seq[Attribute],
+                                     child: SparkPlan,
+                                     stateInfo: Option[StatefulOperatorStateInfo] = None,
+                                     eventTimeWatermark: Option[Long] = None)
+  extends UnaryExecNode with StateStoreWriter with WatermarkSupport {
+
+  /** Distribute by grouping attributes */
+  //  override def requiredChildDistribution: Seq[Distribution] =
+  //    ClusteredDistribution(keyExpressions, stateInfo.map(_.numPartitions)) :: Nil
+
+  override protected def doExecute(): RDD[InternalRow] = {
+    metrics // force lazy init at driver
+
+    child.execute().mapPartitionsWithStateStore(
+      getStateInfo,
+      keyExpressions.toStructType,
+      child.output.toStructType,
+      indexOrdinal = None,
+      sqlContext.sessionState,
+      Some(sqlContext.streams.stateStoreCoordinator)) { (store, iter) =>
+      val getKey = GenerateUnsafeProjection.generate(keyExpressions, child.output)
+      val numOutputRows = longMetric("numOutputRows")
+      val numTotalStateRows = longMetric("numTotalStateRows")
+      val numUpdatedStateRows = longMetric("numUpdatedStateRows")
+      val allUpdatesTimeMs = longMetric("allUpdatesTimeMs")
+      val allRemovalsTimeMs = longMetric("allRemovalsTimeMs")
+      val commitTimeMs = longMetric("commitTimeMs")
+
+      val baseIterator = watermarkPredicateForData match {
+        case Some(predicate) => iter.filter(row => !predicate.eval(row))
+        case None => iter
+      }
+
+      val updatesStartTimeNs = System.nanoTime
+
+      val result = baseIterator.filter { r =>
+        val row = r.asInstanceOf[UnsafeRow]
+        val key = getKey(row)
+        val value = store.get(key)
+        if (value == null) {
+          store.put(key, StreamingDeduplicateWithoutShuffleExec.EMPTY_ROW)
+          numUpdatedStateRows += 1
+          numOutputRows += 1
+          true
+        } else {
+          // Drop duplicated rows
+          false
+        }
+      }
+
+      CompletionIterator[InternalRow, Iterator[InternalRow]](result, {
+        allUpdatesTimeMs += NANOSECONDS.toMillis(System.nanoTime - updatesStartTimeNs)
+        allRemovalsTimeMs += timeTakenMs { removeKeysOlderThanWatermark(store) }
+        commitTimeMs += timeTakenMs { store.commit() }
+        setStoreMetrics(store)
+      })
+    }
+  }
+
+  override def output: Seq[Attribute] = child.output
+
+  override def outputPartitioning: Partitioning = child.outputPartitioning
+}
+
 object StreamingDeduplicateExec {
+  private val EMPTY_ROW =
+    UnsafeProjection.create(Array[DataType](NullType)).apply(InternalRow.apply(null))
+}
+
+object StreamingDeduplicateWithoutShuffleExec {
   private val EMPTY_ROW =
     UnsafeProjection.create(Array[DataType](NullType)).apply(InternalRow.apply(null))
 }

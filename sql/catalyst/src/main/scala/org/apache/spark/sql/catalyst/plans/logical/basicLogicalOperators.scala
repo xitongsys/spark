@@ -421,9 +421,6 @@ case class View(
     output: Seq[Attribute],
     child: LogicalPlan) extends LogicalPlan with MultiInstanceRelation {
 
-  @transient
-  override lazy val references: AttributeSet = AttributeSet.empty
-
   override lazy val resolved: Boolean = child.resolved
 
   override def children: Seq[LogicalPlan] = child :: Nil
@@ -886,8 +883,16 @@ case class OneRowRelation() extends LeafNode {
 
 /** A logical plan for `dropDuplicates`. */
 case class Deduplicate(
-    keys: Seq[Attribute],
-    child: LogicalPlan) extends UnaryNode {
+                        keys: Seq[Attribute],
+                        child: LogicalPlan) extends UnaryNode {
+
+  override def output: Seq[Attribute] = child.output
+}
+
+/** A logical plan for `dropDuplicates`. */
+case class DeduplicateWithoutShuffle(
+                        keys: Seq[Attribute],
+                        child: LogicalPlan) extends UnaryNode {
 
   override def output: Seq[Attribute] = child.output
 }
